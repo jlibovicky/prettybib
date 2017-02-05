@@ -1,0 +1,4 @@
+bibtexparser
+isbnlib
+termcolor
+SPARQLWrapper
