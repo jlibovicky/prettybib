@@ -205,6 +205,7 @@ def check_field(entry, field, try_fix):
     if field not in entry or entry[field] == 'TODO':
         entry[field] = 'TODO'
         err_message(entry, "Missing field '{}'".format(field))
+    else:
         if field in FIELD_CHECKS:
             FIELD_CHECKS[field](entry, try_fix)
 
