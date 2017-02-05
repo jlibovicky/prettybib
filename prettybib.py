@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Bibtex checker and formater.
+"""BibTex checker and formater.
 
 This is a scripts that formats bibtex in a uniform way, orders it by the
 authors surnames and checkes the records have all they need.
@@ -13,7 +13,7 @@ import argparse
 
 from termcolor import colored
 import bibtexparser
-from bibtexparser.bwriter import BibTeXWriter
+from bibtexparser.bwriter import BibTexWriter
 import isbnlib
 from SPARQLWrapper import SPARQLWrapper, JSON
 
@@ -294,7 +294,7 @@ def main():
     check_database(bib_database, args.try_fix)
 
     if args.output:
-        writer = BibTeXWriter()
+        writer = BibTexWriter()
         writer.indent = '    '
         writer.order_by = ['author', 'year', 'title']
         writer.align_values = True
