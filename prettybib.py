@@ -6,10 +6,12 @@ This is a scripts that formats bibtex in a uniform way, orders it by the
 authors surnames and checkes the records have all they need.
 """
 
-import sys
-import datetime
-import re
 import argparse
+import datetime
+from difflib import SequenceMatcher
+import re
+import string
+import sys
 
 from termcolor import colored
 import bibtexparser
@@ -59,7 +61,7 @@ def check_pages(entry, _):
     pages_match = PAGE_REGEX.match(pages)
     if pages_match:
         start, end = pages_match.groups()
-        if end < start:
+        if int(end) < int(start):
             err_message(entry,
                         "the end page ({}) is before the start page ({})".
                         format(end, start))
@@ -83,32 +85,36 @@ def check_isbn(entry, try_fix):
                             ("ISBN10 ({}) were issued only before 2007," +
                              " year is actually {}").
                             format(isbn_string, entry['year']))
+                return False
+            return True
         # pylint: disable=bare-except
         except:
-            pass
+            return False
     elif isbnlib.is_isbn13(isbn_string):
         # is_valid_isbn = True
         try:
-            if int(entry['year']) < 2007:
+            if int(entry['year']) < 2007 and isbn_string.starstwith('978'):
                 err_message(entry,
                             ("ISBN13 ({}) were issued only after 2007," +
                              " year is actually {}").
                             format(isbn_string, entry['year']))
+            return True
         # pylint: disable=bare-except
         except:
-            pass
+            return False
     else:
         if isbn_string != 'TODO':
             err_message(entry, "Invalid ISBN {}".format(isbn_string))
         # TODO try to look up isbn using isbnlib.goom()
         # intitle:Understanding+inauthor:McLuhan&tbs=,
         #        cdr:1,cd_min:Jan+1_2+1964,cd_max:Dec+31_2+1974&num=10
-        return
+        return False
 
     if try_fix:
         _fix_based_on_isbn(isbn_string, entry)
 
     entry['isbn'] = isbnlib.mask(isbn_string)
+    return True
 
 
 def _fix_based_on_isbn(isbn_string, entry):
@@ -147,33 +153,37 @@ def check_issn(entry, try_fix):
     if ISSN_REGEX.match(issn_str):
         pass
         # TODO get journal infomation and check
-    else:
-        if issn_str != 'TODO':
-            err_message(entry, "Ivalid ISSN format ({}).")
+        return True
 
-        if 'journal' in entry and try_fix:
-            journal = entry['journal']
+    if issn_str != 'TODO':
+        err_message(entry, "Ivalid ISSN format ({}).")
 
-            sparql = SPARQLWrapper("http://dbpedia.org/sparql")
-            sparql.setReturnFormat(JSON)
-            sparql.setQuery("""
-                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                PREFIX type: <http://dbpedia.org/ontology/>
-                SELECT ?journal ?issn
-                WHERE {{
-                         ?journal a type:AcademicJournal ;
-                         rdfs:label ?journal_name ;
-                         dbo:issn ?issn .
-                         FILTER(str(?journal_name)="{}")
-            }}""".format(journal))
-            results = sparql.query().convert()
-            if results['results']['bindings']:
-                issn = results['results']['bindings'][0]['issn']['value']
-                entry['issn'] = issn
-                log_message(entry, "ISSN for '{}' found: {}".
-                            format(journal, issn))
-            else:
-                err_message(entry, "ISSN for '{}' not found.".format(journal))
+    if 'journal' in entry and try_fix:
+        journal = entry['journal']
+
+        sparql = SPARQLWrapper("http://dbpedia.org/sparql")
+        sparql.setReturnFormat(JSON)
+        sparql.setQuery("""
+            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            PREFIX type: <http://dbpedia.org/ontology/>
+            SELECT ?journal ?issn
+            WHERE {{
+                     ?journal a type:AcademicJournal ;
+                     rdfs:label ?journal_name ;
+                     dbo:issn ?issn .
+                     FILTER(str(?journal_name)="{}")
+        }}""".format(journal))
+        results = sparql.query().convert()
+
+        if results['results']['bindings']:
+            issn = results['results']['bindings'][0]['issn']['value']
+            entry['issn'] = issn
+            log_message(entry, "ISSN for '{}' found: {}".
+                        format(journal, issn))
+            return True
+
+        err_message(entry, "ISSN for '{}' not found.".format(journal))
+        return False
 
     # TODO check address in dbpedia
 
@@ -205,9 +215,9 @@ def check_field(entry, field, try_fix):
     if field not in entry or entry[field] == 'TODO':
         entry[field] = 'TODO'
         err_message(entry, "Missing field '{}'".format(field))
-    else:
         if field in FIELD_CHECKS:
-            FIELD_CHECKS[field](entry, try_fix)
+            return FIELD_CHECKS[field](entry, try_fix)
+    return True
 
 
 def check_article(entry, try_fix):
@@ -226,7 +236,7 @@ def check_article(entry, try_fix):
             # TODO check whether link and volume agree
         else:
             check_field(entry, 'issn', try_fix)
-            check_field(entry, 'issue', try_fix)
+            check_field(entry, 'number', try_fix)
             check_field(entry, 'pages', try_fix)
             check_field(entry, 'publisher', try_fix)
             check_field(entry, 'address', try_fix)
@@ -262,17 +272,80 @@ def check_database(database, try_fix):
     Goes through the bib database and checks if everyting is
     as it shoudl be.
     """
+
+    authors = {}
+    keys = set()
+    titles = {}
+
     for entry in database.entries:
         # normalize the vaues
         for key, value in entry.items():
             entry[key] = re.sub(r"\s+", " ", value)
 
+        if 'author' in entry:
+            for author in entry['author'].split(' and '):
+                if author not in authors:
+                    authors[author] = []
+                authors[author].append(entry['ID'])
         check_field(entry, 'author', try_fix)
+
+        if 'title' in entry:
+            norm_title = entry['title'].lower().translate(
+                str.maketrans('', '', string.whitespace + '}{'))
+            if norm_title in titles:
+                msg = ("Reference with this title if already "
+                        "in the database as {}.").format(
+                            ", ".join(titles[norm_title]))
+                err_message(entry, msg)
+                titles[norm_title].append(entry['ID'])
+            else:
+                titles[norm_title] = [entry['ID']]
         check_field(entry, 'title', try_fix)
 
         entry_type = entry['ENTRYTYPE']
         if entry_type in ENTRY_CHECKS:
             ENTRY_CHECKS[entry_type](entry, try_fix)
+
+    return authors
+
+
+def check_author_misspellings(authors):
+    """Check for authors with minor differences in spelling."""
+    collision_groups = {}
+    for author1 in authors:
+        for author2 in authors:
+            if author1 == author2:
+                continue
+
+            if SequenceMatcher(None, author1, author2).ratio() > 0.8:
+                if (author1 not in collision_groups
+                        and author2 in collision_groups):
+                    collision_groups[author1] = collision_groups[author2]
+                    collision_groups[author2].add(author1)
+                elif (author2 not in collision_groups
+                        and author1 in collision_groups):
+                    collision_groups[author2] = collision_groups[author1]
+                    collision_groups[author1].add(author2)
+                elif (author1 in collision_groups
+                        and author2 in collision_groups):
+                    collision_groups[author1] = collision_groups[author1].union(
+                        collision_groups[author2])
+                    collision_groups[author2] = collision_groups[author1]
+                else:
+                    new_group = set([author1, author2])
+                    collision_groups[author1] = new_group
+                    collision_groups[author2] = new_group
+
+    used_authors = set()
+    for group in collision_groups.values():
+        if used_authors.intersection(group):
+            continue
+        used_authors.update(group)
+        formatted_authors = [
+            "'{}' ({})".format(a, ", ".join(authors[a]))
+            for a in group]
+        print(colored("Authors might be the same: {}".format(
+            ", ".join(formatted_authors)), color='yellow'), file=sys.stderr)
 
 
 def main():
@@ -285,21 +358,22 @@ def main():
     parser.add_argument("--input", type=argparse.FileType('r'),
                         default=sys.stdin,
                         help="Input file, default is stdin.")
-    parser.add_argument("--output", type=argparse.FileType('w'), default=None,
+    parser.add_argument("--output", type=argparse.FileType('w'), default=sys.stdout,
                         help="Optional output file.")
     parser.add_argument("--try-fix", type=bool, default=False,
                         help="Flag to search information to fix the dtabase.")
     args = parser.parse_args()
 
     bib_database = bibtexparser.load(args.input)
-    check_database(bib_database, args.try_fix)
+    authors = check_database(bib_database, args.try_fix)
+    check_author_misspellings(authors)
 
-    if args.output:
-        writer = BibTexWriter()
-        writer.indent = '    '
-        writer.order_by = ['author', 'year', 'title']
-        writer.align_values = True
-        args.output.write(writer.write(bib_database))
+    writer = BibTexWriter()
+    writer.indent = '    '
+    writer.order_by = ['author', 'year', 'title']
+    writer.display_order = ['author', 'title', 'booktitle', 'journal']
+    writer.align_values = True
+    args.output.write(writer.write(bib_database))
 
 
 if __name__ == "__main__":
