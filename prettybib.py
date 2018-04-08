@@ -33,6 +33,10 @@ def err_message(entry, message):
     log_message(entry, message, color='red')
 
 
+def similarity(str_1, str_2):
+    return SequenceMatcher(None, str_1, str_2).ratio()
+
+
 def check_year(entry, _):
     """Check the sanitiy of a year."""
     try:
@@ -161,6 +165,10 @@ def check_issn(entry, try_fix):
     if 'journal' in entry and try_fix:
         journal = entry['journal']
 
+        if journal in CACHED_JOURNALS:
+            entry['issn'] = CACHED_JOURNALS[journal]
+            return True
+
         sparql = SPARQLWrapper("http://dbpedia.org/sparql")
         sparql.setReturnFormat(JSON)
         sparql.setQuery("""
@@ -227,9 +235,8 @@ def check_article(entry, try_fix):
         # TODO try to recover from ISSN or paper name
     else:
         journal = entry['journal']
-
         if journal == 'CoRR' or journal.startswith('arXiv'):
-            entry['journal'] = 'arXiv.org'
+            entry['journal'] = 'CoRR'
             entry['issn'] = '2331-8422'
             check_field(entry, 'link', try_fix)
             check_field(entry, 'volume', try_fix)
@@ -264,6 +271,22 @@ ENTRY_CHECKS = {
     'inproceedings': check_inproceedings,
     'book': check_book
 }
+
+
+CACHED_JOURNALS = {}
+
+
+def cache_journal_issn(database):
+    for entry in database.entries:
+        if entry['ENTRYTYPE'] == "article":
+            name = entry["journal"]
+            if "issn" in entry:
+                if name not in CACHED_JOURNALS:
+                    CACHED_JOURNALS[name] = entry["issn"]
+                elif entry["issn"] != CACHED_JOURNALS[name]:
+                    print(
+                        "Journal '{}' has more differens ISSNs.".format(name),
+                        file=sys.stderr)
 
 
 def check_database(database, try_fix):
@@ -317,7 +340,7 @@ def check_author_misspellings(authors):
             if author1 == author2:
                 continue
 
-            if SequenceMatcher(None, author1, author2).ratio() > 0.8:
+            if similarity(author1, author2) > 0.8:
                 if (author1 not in collision_groups
                         and author2 in collision_groups):
                     collision_groups[author1] = collision_groups[author2]
@@ -365,6 +388,7 @@ def main():
     args = parser.parse_args()
 
     bib_database = bibtexparser.load(args.input)
+    cache_journal_issn(bib_database)
     authors = check_database(bib_database, args.try_fix)
     check_author_misspellings(authors)
 
