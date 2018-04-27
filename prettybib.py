@@ -263,8 +263,17 @@ def check_article(entry, try_fix):
     else:
         journal = entry['journal']
         if journal == 'CoRR' or journal.startswith('arXiv'):
-            entry['journal'] = 'CoRR'
-            entry['issn'] = '2331-8422'
+            if try_fix and 'title' in entry:
+                norm_title = normalize_title(entry['title'])
+                if norm_title in CITATION_DATABASE:
+                    log_message(
+                        entry, "Preprint found as proper publication, replacing.")
+                    entry.clear()
+                    entry.update(CITATION_DATABASE[norm_title])
+
+            if try_fix:
+                entry['journal'] = 'CoRR'
+                entry['issn'] = '2331-8422'
             check_field(entry, 'link', try_fix)
             check_field(entry, 'volume', try_fix)
             # TODO check whether link and volume agree
