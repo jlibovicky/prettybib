@@ -21,12 +21,27 @@ from SPARQLWrapper import SPARQLWrapper, JSON
 
 # pylint: disable=fixme
 
+CITATION_DATABASE = {}
+
+
+def normalize_title(title):
+    return title.lower().translate(str.maketrans(
+        '', '', string.whitespace + '}{'))
+
+
+def load_anthologies(anthologies):
+    for anthology in anthologies:
+        with open(anthology, "r", encoding="utf-8") as f_anth:
+            bib_database = bibtexparser.load(f_anth)
+            for entry in bib_database.entries:
+                norm_title = normalize_title(entry['title'])
+                CITATION_DATABASE[norm_title] = entry
+
 
 def log_message(entry, message, color='green'):
     """Print colored log message."""
     sys.stderr.write(colored("{} ({}): {}\n".format(
         entry['ID'], entry['ENTRYTYPE'], message), color=color))
-
 
 def err_message(entry, message):
     """Print red error message."""
@@ -218,13 +233,25 @@ FIELD_CHECKS = {
 }
 
 
-def check_field(entry, field, try_fix):
+def check_field(entry, field, try_fix, try_find=False):
     """Check if a field in in the entry, if not add a TODO."""
     if field not in entry or entry[field] == 'TODO':
+        if try_fix and try_find and 'title' in entry:
+            norm_title = normalize_title(entry['title'])
+            if norm_title in CITATION_DATABASE:
+                database_entry = CITATION_DATABASE[norm_title]
+                if field in database_entry:
+                    value = database_entry[field]
+                    entry[field] = value
+                    log_message(
+                        entry,
+                        "Field {} copied from database as: '{}'.".format(
+                            field, value))
         entry[field] = 'TODO'
         err_message(entry, "Missing field '{}'".format(field))
         if field in FIELD_CHECKS:
             return FIELD_CHECKS[field](entry, try_fix)
+        return False
     return True
 
 
@@ -258,12 +285,12 @@ def check_book(entry, try_fix):
 
 def check_inproceedings(entry, try_fix):
     """Check and fix inproceedings entries."""
-    check_field(entry, 'booktitle', try_fix)
-    check_field(entry, 'month', try_fix)
-    check_field(entry, 'year', try_fix)
-    check_field(entry, 'address', try_fix)
-    check_field(entry, 'pages', try_fix)
-    check_field(entry, 'publisher', try_fix)
+    check_field(entry, 'booktitle', try_fix, try_find=True)
+    check_field(entry, 'month', try_fix, try_find=True)
+    check_field(entry, 'year', try_fix, try_find=True)
+    check_field(entry, 'address', try_fix, try_find=True)
+    check_field(entry, 'pages', try_fix, try_find=True)
+    check_field(entry, 'publisher', try_fix, try_find=True)
 
 
 ENTRY_CHECKS = {
@@ -385,8 +412,11 @@ def main():
                         help="Optional output file.")
     parser.add_argument("--try-fix", type=bool, default=False,
                         help="Flag to search information to fix the dtabase.")
+    parser.add_argument("--anthologies", type=str, nargs='+',
+                        help="List of BibTeX files with know papers.")
     args = parser.parse_args()
 
+    load_anthologies(args.anthologies)
     bib_database = bibtexparser.load(args.input)
     cache_journal_issn(bib_database)
     authors = check_database(bib_database, args.try_fix)
