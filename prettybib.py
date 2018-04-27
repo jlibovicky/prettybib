@@ -34,8 +34,9 @@ def load_anthologies(anthologies):
         with open(anthology, "r", encoding="utf-8") as f_anth:
             bib_database = bibtexparser.load(f_anth)
             for entry in bib_database.entries:
-                norm_title = normalize_title(entry['title'])
-                CITATION_DATABASE[norm_title] = entry
+                if 'title' in entry:
+                    norm_title = normalize_title(entry['title'])
+                    CITATION_DATABASE[norm_title] = entry
 
 
 def log_message(entry, message, color='green'):
