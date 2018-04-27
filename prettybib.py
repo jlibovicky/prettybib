@@ -326,14 +326,31 @@ def cache_journal_issn(database):
                         file=sys.stderr)
 
 
+def cache_field(entry, field, cache_dict):
+    """Cache a field for later similarity search."""
+    if field in entry:
+        values = (
+            entry[field].split(' and ') if field == 'author'
+            else [entry[field]])
+        for value in values:
+            if value not in cache_dict:
+                cache_dict[value] = []
+            cache_dict[value].append(entry['ID'])
+
+
 def check_database(database, try_fix):
     """Check the database entries.
 
     Goes through the bib database and checks if everyting is
     as it shoudl be.
+
+    Returns:
+        Dictionaries of chached author, journal and proceedings names, so they
+        can be later checked for near duplicites.
     """
 
-    authors = {}
+    authors, journals, booktitles = {}, {}, {}
+
     keys = set()
     titles = {}
 
@@ -342,11 +359,10 @@ def check_database(database, try_fix):
         for key, value in entry.items():
             entry[key] = re.sub(r"\s+", " ", value)
 
-        if 'author' in entry:
-            for author in entry['author'].split(' and '):
-                if author not in authors:
-                    authors[author] = []
-                authors[author].append(entry['ID'])
+        cache_field(entry, 'author', authors)
+        cache_field(entry, 'journal', journals)
+        cache_field(entry, 'booktitle', booktitles)
+
         check_field(entry, 'author', try_fix)
 
         if 'title' in entry:
@@ -366,46 +382,46 @@ def check_database(database, try_fix):
         if entry_type in ENTRY_CHECKS:
             ENTRY_CHECKS[entry_type](entry, try_fix)
 
-    return authors
+    return authors, journals, booktitles
 
 
-def check_author_misspellings(authors):
-    """Check for authors with minor differences in spelling."""
+def look_for_misspellings(values, name):
+    """Check for values with minor differences in spelling."""
     collision_groups = {}
-    for author1 in authors:
-        for author2 in authors:
-            if author1 == author2:
+    for value1 in values:
+        for value2 in values:
+            if value1 == value2:
                 continue
 
-            if similarity(author1, author2) > 0.8:
-                if (author1 not in collision_groups
-                        and author2 in collision_groups):
-                    collision_groups[author1] = collision_groups[author2]
-                    collision_groups[author2].add(author1)
-                elif (author2 not in collision_groups
-                        and author1 in collision_groups):
-                    collision_groups[author2] = collision_groups[author1]
-                    collision_groups[author1].add(author2)
-                elif (author1 in collision_groups
-                        and author2 in collision_groups):
-                    collision_groups[author1] = collision_groups[author1].union(
-                        collision_groups[author2])
-                    collision_groups[author2] = collision_groups[author1]
+            if similarity(value1, value2) > 0.8:
+                if (value1 not in collision_groups
+                        and value2 in collision_groups):
+                    collision_groups[value1] = collision_groups[value2]
+                    collision_groups[value2].add(value1)
+                elif (value2 not in collision_groups
+                        and value1 in collision_groups):
+                    collision_groups[value2] = collision_groups[value1]
+                    collision_groups[value1].add(value2)
+                elif (value1 in collision_groups
+                        and value2 in collision_groups):
+                    collision_groups[value1] = collision_groups[value1].union(
+                        collision_groups[value2])
+                    collision_groups[value2] = collision_groups[value1]
                 else:
-                    new_group = set([author1, author2])
-                    collision_groups[author1] = new_group
-                    collision_groups[author2] = new_group
+                    new_group = set([value1, value2])
+                    collision_groups[value1] = new_group
+                    collision_groups[value2] = new_group
 
-    used_authors = set()
+    used_values = set()
     for group in collision_groups.values():
-        if used_authors.intersection(group):
+        if used_values.intersection(group):
             continue
-        used_authors.update(group)
-        formatted_authors = [
-            "'{}' ({})".format(a, ", ".join(authors[a]))
+        used_values.update(group)
+        formatted_values = [
+            "'{}' ({})".format(a, ", ".join(values[a]))
             for a in group]
-        print(colored("Authors might be the same: {}".format(
-            ", ".join(formatted_authors)), color='yellow'), file=sys.stderr)
+        print(colored("{} might be the same: {}".format(
+            name, ", ".join(formatted_values)), color='yellow'), file=sys.stderr)
 
 
 def main():
@@ -429,8 +445,11 @@ def main():
     load_anthologies(args.anthologies)
     bib_database = bibtexparser.load(args.input)
     cache_journal_issn(bib_database)
-    authors = check_database(bib_database, args.try_fix)
-    check_author_misspellings(authors)
+    authors, journals, booktitles = check_database(bib_database, args.try_fix)
+
+    look_for_misspellings(authors, 'Authors')
+    look_for_misspellings(journals, 'Journals')
+    look_for_misspellings(booktitles, 'Booktitles (proceedings)')
 
     writer = BibTexWriter()
     writer.indent = '    '
