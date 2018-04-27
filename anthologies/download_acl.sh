@@ -7,7 +7,9 @@ while read -r URL; do
 	echo $URL
 	sleep 1
 	curl $URL | grep -oP 'href="[^"]*\.bib"' | sed -e "s#href=\"##;s/\"$//;s#^#${URL}#" | while read -r BIB_URL; do
-		sleep 2
-		curl $BIB_URL >> acl.bib
+		sleep 1
+		curl $BIB_URL | uconv -t utf-8 | ./validate.py >> acl.bib
+        echo >> acl.bib
+        echo >> acl.bib
 	done
 done
