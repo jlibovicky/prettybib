@@ -422,6 +422,8 @@ def look_for_misspellings(values, name):
             for a in group]
         print(colored("{} might be the same: {}".format(
             name, ", ".join(formatted_values)), color='yellow'), file=sys.stderr)
+        for val in formatted_values:
+            print(colored(" * {}".format(val), color='yellow'), file=sys.stderr)
 
 
 def main():
