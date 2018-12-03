@@ -23,6 +23,12 @@ from SPARQLWrapper import SPARQLWrapper, JSON
 
 CITATION_DATABASE = {}
 
+def get_bibparser():
+    return bibtexparser.bparser.BibTexParser(
+        ignore_nonstandard_types=False,
+        homogenize_fields=True,
+        common_strings=True)
+
 
 def normalize_title(title):
     return title.lower().translate(str.maketrans(
@@ -32,11 +38,16 @@ def normalize_title(title):
 def load_anthologies(anthologies):
     for anthology in anthologies:
         with open(anthology, "r", encoding="utf-8") as f_anth:
-            bib_database = bibtexparser.load(f_anth)
+            sys.stderr.write("Loading {} ... ".format(anthology))
+            sys.stderr.flush()
+
+            bib_database = bibtexparser.load(f_anth, get_bibparser())
             for entry in bib_database.entries:
                 if 'title' in entry:
                     norm_title = normalize_title(entry['title'])
                     CITATION_DATABASE[norm_title] = entry
+            print("done, {} items".format(
+                len(bib_database.entries)), file=sys.stderr)
 
 
 def log_message(entry, message, color='green'):
@@ -171,7 +182,6 @@ def check_issn(entry, try_fix):
     """Check ISSN number."""
     issn_str = entry['issn']
     if ISSN_REGEX.match(issn_str):
-        pass
         # TODO get journal infomation and check
         return True
 
@@ -208,22 +218,7 @@ def check_issn(entry, try_fix):
 
         err_message(entry, "ISSN for '{}' not found.".format(journal))
         return False
-
-    # TODO check address in dbpedia
-
-    # PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-    # PREFIX type: <http://dbpedia.org/ontology/>
-    # PREFIX prop: <http://dbpedia.org/property/>
-    # SELECT ?name
-    # WHERE {
-    #    ?city a type:Settlement ;
-    #    rdfs:label ?name ;
-    #    dbo:country ?country.
-    #    ?country rdfs:label ?country_name .
-    #    FILTER(str(?name) = "Prague") .
-    #    FILTER(langMatches(lang(?name),"EN")) .
-    #    FILTER(str(?country_name) = "Czech Republic")
-    # }
+    return False
 
 
 FIELD_CHECKS = {
@@ -237,6 +232,7 @@ FIELD_CHECKS = {
 def check_field(entry, field, try_fix, try_find=False):
     """Check if a field in in the entry, if not add a TODO."""
     if field not in entry or entry[field] == 'TODO':
+        entry[field] = 'TODO'
         if try_fix and try_find and 'title' in entry:
             norm_title = normalize_title(entry['title'])
             if norm_title in CITATION_DATABASE:
@@ -248,7 +244,6 @@ def check_field(entry, field, try_fix, try_find=False):
                         entry,
                         "Field {} copied from database as: '{}'.".format(
                             field, value))
-        entry[field] = 'TODO'
         err_message(entry, "Missing field '{}'".format(field))
         if field in FIELD_CHECKS:
             return FIELD_CHECKS[field](entry, try_fix)
@@ -268,19 +263,26 @@ def check_article(entry, try_fix):
                 norm_title = normalize_title(entry['title'])
                 if norm_title in CITATION_DATABASE:
                     log_message(
-                        entry, "Preprint found as proper publication, replacing.")
+                        entry,
+                        "Preprint found as a proper publication, replacing.")
                     entry.clear()
                     entry.update(CITATION_DATABASE[norm_title])
 
             if try_fix:
                 entry['journal'] = 'CoRR'
                 entry['issn'] = '2331-8422'
-            check_field(entry, 'link', try_fix)
+
+                if 'volume' in entry and entry['volume'].startswith('abs/'):
+                    entry['url'] = "https://arxiv.org/{}".format(
+                        entry['volume'])
+
+            check_field(entry, 'url', try_fix)
             check_field(entry, 'volume', try_fix)
             # TODO check whether link and volume agree
         else:
             check_field(entry, 'issn', try_fix)
-            check_field(entry, 'number', try_fix)
+            if 'volume' not in entry:
+                check_field(entry, 'number', try_fix)
             check_field(entry, 'pages', try_fix)
             check_field(entry, 'publisher', try_fix)
             check_field(entry, 'address', try_fix)
@@ -338,6 +340,18 @@ def cache_field(entry, field, cache_dict):
             cache_dict[value].append(entry['ID'])
 
 
+def normalize_authors(author_field):
+    orig_authors = author_field.split(" and ")
+    new_authors = []
+    for author in orig_authors:
+        if "," in author:
+            surname, first_names = re.split(r",\s+", author)
+            new_authors.append("{} {}".format(first_names, surname))
+        else:
+            new_authors.append(author)
+    return " and ".join(new_authors)
+
+
 def check_database(database, try_fix):
     """Check the database entries.
 
@@ -351,13 +365,15 @@ def check_database(database, try_fix):
 
     authors, journals, booktitles = {}, {}, {}
 
-    keys = set()
     titles = {}
 
     for entry in database.entries:
         # normalize the vaues
         for key, value in entry.items():
             entry[key] = re.sub(r"\s+", " ", value)
+
+        if 'author' in entry:
+            entry['author'] = normalize_authors(entry['author'])
 
         cache_field(entry, 'author', authors)
         cache_field(entry, 'journal', journals)
@@ -369,9 +385,9 @@ def check_database(database, try_fix):
             norm_title = entry['title'].lower().translate(
                 str.maketrans('', '', string.whitespace + '}{'))
             if norm_title in titles:
-                msg = ("Reference with this title if already "
-                        "in the database as {}.").format(
-                            ", ".join(titles[norm_title]))
+                msg = ("Reference with this title is already "
+                       "in the database as {}.").format(
+                           ", ".join(titles[norm_title]))
                 err_message(entry, msg)
                 titles[norm_title].append(entry['ID'])
             else:
@@ -399,11 +415,11 @@ def look_for_misspellings(values, name):
                     collision_groups[value1] = collision_groups[value2]
                     collision_groups[value2].add(value1)
                 elif (value2 not in collision_groups
-                        and value1 in collision_groups):
+                      and value1 in collision_groups):
                     collision_groups[value2] = collision_groups[value1]
                     collision_groups[value1].add(value2)
                 elif (value1 in collision_groups
-                        and value2 in collision_groups):
+                      and value2 in collision_groups):
                     collision_groups[value1] = collision_groups[value1].union(
                         collision_groups[value2])
                     collision_groups[value2] = collision_groups[value1]
@@ -421,9 +437,11 @@ def look_for_misspellings(values, name):
             "'{}' ({})".format(a, ", ".join(values[a]))
             for a in group]
         print(colored("{} might be the same: {}".format(
-            name, ", ".join(formatted_values)), color='yellow'), file=sys.stderr)
+            name, ", ".join(formatted_values)), color='yellow'),
+              file=sys.stderr)
         for val in formatted_values:
-            print(colored(" * {}".format(val), color='yellow'), file=sys.stderr)
+            print(colored(" * {}".format(val), color='yellow'),
+                  file=sys.stderr)
 
 
 def main():
@@ -433,19 +451,23 @@ def main():
     sorted and formated database.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=argparse.FileType('r'),
-                        default=sys.stdin,
-                        help="Input file, default is stdin.")
-    parser.add_argument("--output", type=argparse.FileType('w'), default=sys.stdout,
-                        help="Optional output file.")
-    parser.add_argument("--try-fix", type=bool, default=False,
-                        help="Flag to search information to fix the dtabase.")
-    parser.add_argument("--anthologies", type=str, nargs='+',
-                        help="List of BibTeX files with know papers.")
+    parser.add_argument(
+        "--input", type=argparse.FileType('r'), default=sys.stdin,
+        help="Input file, default is stdin.")
+    parser.add_argument(
+        "--output", type=argparse.FileType('w'), default=sys.stdout,
+        help="Optional output file.")
+    parser.add_argument(
+        "--try-fix", default=False, action="store_true",
+        help="Flag to search information to fix the dtabase.")
+    parser.add_argument(
+        "--anthologies", type=str, nargs='+',
+        help="List of BibTeX files with know papers.")
     args = parser.parse_args()
 
-    load_anthologies(args.anthologies)
-    bib_database = bibtexparser.load(args.input)
+    if args.anthologies is not None:
+        load_anthologies(args.anthologies)
+    bib_database = bibtexparser.load(args.input, get_bibparser())
     cache_journal_issn(bib_database)
     authors, journals, booktitles = check_database(bib_database, args.try_fix)
 
