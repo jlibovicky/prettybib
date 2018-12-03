@@ -305,10 +305,19 @@ def check_inproceedings(entry, try_fix):
     check_field(entry, 'publisher', try_fix, try_find=True)
 
 
+def check_techreport(entry, try_fix):
+    """Check and fix inproceedings entries."""
+    check_field(entry, 'month', try_fix, try_find=True)
+    check_field(entry, 'year', try_fix, try_find=True)
+    check_field(entry, 'address', try_fix, try_find=True)
+    check_field(entry, 'institution', try_fix, try_find=True)
+
+
 ENTRY_CHECKS = {
     'article': check_article,
     'inproceedings': check_inproceedings,
-    'book': check_book
+    'book': check_book,
+    'techreport': check_techreport
 }
 
 
