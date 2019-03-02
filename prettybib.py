@@ -11,13 +11,16 @@ import datetime
 from difflib import SequenceMatcher
 import re
 import string
+import urllib.request
 import sys
 
+import bs4
 from termcolor import colored
 import bibtexparser
 from bibtexparser.bwriter import BibTexWriter
 import isbnlib
 from SPARQLWrapper import SPARQLWrapper, JSON
+import pycountry
 
 # pylint: disable=fixme
 
@@ -55,13 +58,31 @@ def log_message(entry, message, color='green'):
     sys.stderr.write(colored("{} ({}): {}\n".format(
         entry['ID'], entry['ENTRYTYPE'], message), color=color))
 
+
 def err_message(entry, message):
     """Print red error message."""
     log_message(entry, message, color='red')
 
 
 def similarity(str_1, str_2):
-    return SequenceMatcher(None, str_1, str_2).ratio()
+    matcher = SequenceMatcher(None, str_1, str_2)
+    return matcher.ratio()
+
+
+NUM_REGEX = re.compile(r"[0-9]+(st|nd|rd|th)?")
+ORDINALS = re.compile("(" + "|".join([
+    "First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh",
+    "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth", "Thirteenth",
+    "Fourteenth", "Fifteenth", "Sixteenth", "Seventeenth"]) + ")")
+PAPERS_VOLUME = re.compile("(Long|Short|Research|Shared Task) Papers")
+
+
+def norm_booktitle(title):
+    title = NUM_REGEX.sub("XX", title)
+    title = ORDINALS.sub("XX", title)
+    title = PAPERS_VOLUME.sub("YY Papers", title)
+
+    return title
 
 
 def check_year(entry, _):
@@ -81,6 +102,19 @@ def check_year(entry, _):
         if entry['year'] != 'TODO':
             err_message(entry,
                         "year '{}' is not an integer".format(entry['year']))
+
+
+MONTHS = [
+    "January", "Feburay", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December"]
+
+
+def check_month(entry, _):
+    month = entry["month"]
+    if month not in MONTHS:
+        err_message(entry, "'{}' is not valid month name.".format(month))
+        return False
+    return True
 
 
 PAGE_REGEX = re.compile(r"^([1-9][0-9]*)[\W_]+([1-9][0-9]*)$")
@@ -221,11 +255,176 @@ def check_issn(entry, try_fix):
     return False
 
 
+def check_booktitle(entry, try_fix):
+    if entry['booktitle'].endswith("Conference on"):
+        err_message(entry,
+            "Book title should not end with 'Conference on', rephrase")
+        return False
+    return True
+
+
+US_STATES = [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "D.C."]
+
+
+def check_address(entry, _):
+    address = entry["address"]
+    tokens = address.split(", ")
+
+    if len(tokens) != 2 and (len(tokens) != 3 or tokens[-1] != "USA"):
+        err_message(
+            entry,
+            "Adrress should be comma-separated city "
+            "and country, was '{}'".format(address))
+        return False
+
+    country = tokens[-1]
+    if country == "USA":
+        if len(tokens) != 3:
+            err_message(entry, "USA cities must have state.")
+            return False
+
+        if tokens[1] not in US_STATES:
+            err_message(
+                entry,
+                "'{}' is not existing U.S. state abreviation.".format(
+                    tokens[1]))
+            return False
+
+        return True
+
+    if country == "Taiwan" or country == "Czech Republic":
+        return True
+
+    if country == "Czechia":
+        err_message(entry, "Use 'Czech Republic' instead of 'Czechia'.")
+        return False
+
+    country_lookup = None
+    try:
+        country_lookup = pycountry.countries.lookup(country)
+    except LookupError:
+        pass
+
+    if country_lookup is None:
+        err_message(entry, "Unknown country: '{}'".format(country))
+        return False
+
+    if country != country_lookup.name:
+        err_message(entry, "Use '{}' instead of '{}'.".format(
+            country_lookup.name, country))
+
+    return True
+
+
+def check_author(entry, _):
+    authors = entry["author"].split(" and ")
+    problem = False
+    for author in authors:
+        names = author.split()
+        if re.match(r"^[A-Z]\.?$", names[0]):
+            err_message(
+                entry,
+                "'{}' seem to have only initial, not full name.".format(
+                    author))
+            problem = True
+
+        if any(n.endswith(".") for n in names):
+            err_message(
+                entry,
+                "Initials should not contain dot: '{}'".format(author))
+            problem = True
+    return not problem
+
+
+NON_APLHNUM = re.compile(r"[^A-Za-z0-9]+")
+
+
+def search_crossref_for_doi(title):
+    keywords = title.lower().replace(" ", "+")
+    title_signature = NON_APLHNUM.sub("", title.lower())
+
+    searchurl = 'http://search.crossref.org/?q='
+    requrl = searchurl+keywords
+    s = bs4.BeautifulSoup(urllib.request.urlopen(requrl).read(), 'lxml')
+    item_list = s.findAll('td', {'class':'item-data'})
+
+    titles = [i.find('p', {'class':'lead'}).text.strip() for i in item_list]
+    doiurls = [
+        i.find('div', {'class':'item-links'}).find('a')['href']
+        for i in item_list]
+
+    assert len(titles) == len(doiurls)
+
+    found_dois = []
+    for found_title, doi_url in zip(titles, doiurls):
+        if 'itationsBox' in doi_url:
+            continue
+        found_title_signature = NON_APLHNUM.sub("", found_title.lower())
+        if title_signature == found_title_signature:
+            found_dois.append(doi_url[16:])
+    return found_dois
+
+
+DOI_PREFIX = re.compile(r"^[0-9]{2}\.[0-9]{4,5}$")
+
+
+def check_doi(entry, try_fix):
+    doi_ok = True
+    doi = entry['doi']
+
+    if doi == "TODO":
+        doi_ok = False
+    elif "/" not in doi:
+        doi_ok = False
+        err_message(
+            entry,
+            "doi should contain '/', was '{}'".format(doi))
+    else:
+        doi_parts = doi.split('/')
+
+        doi_prefix = doi_parts[0]
+        if DOI_PREFIX.match(doi_prefix) is None:
+            err_message(
+                entry,
+                "doi prefix must be in format '10.XXXX', was '{}'".format(
+                    doi_prefix))
+            doi_ok = False
+
+    if doi_ok:
+        # TODO: try retrieve bib by doi
+        return True
+
+    if try_fix and not doi_ok:
+        lookup = search_crossref_for_doi(entry['title'])
+
+        if not lookup:
+            return False
+
+        if len(lookup) > 1:
+            err_message(entry, "Found multiple dois: {}".format(", ".join(lookup)))
+            return False
+
+        entry['doi'] = lookup[0]
+        log_message(entry, 'doi found on crossref.org')
+        return True
+    return False
+
+
 FIELD_CHECKS = {
     'year': check_year,
     'pages': check_pages,
     'isbn': check_isbn,
-    'issn': check_issn
+    'issn': check_issn,
+    'booktitle': check_booktitle,
+    'month': check_month,
+    'address': check_address,
+    'author': check_author,
+    'doi': check_doi,
 }
 
 
@@ -248,6 +447,8 @@ def check_field(entry, field, try_fix, try_find=False):
         if field in FIELD_CHECKS:
             return FIELD_CHECKS[field](entry, try_fix)
         return False
+    if field in FIELD_CHECKS:
+        return FIELD_CHECKS[field](entry, try_fix)
     return True
 
 
@@ -280,29 +481,34 @@ def check_article(entry, try_fix):
             check_field(entry, 'volume', try_fix)
             # TODO check whether link and volume agree
         else:
+            check_field(entry, 'doi', try_fix, try_find=True)
             check_field(entry, 'issn', try_fix)
             if 'volume' not in entry:
                 check_field(entry, 'number', try_fix)
             check_field(entry, 'pages', try_fix)
             check_field(entry, 'publisher', try_fix)
             check_field(entry, 'address', try_fix)
+            check_field(entry, 'url', try_fix)
 
 
 def check_book(entry, try_fix):
     """Check and fix book entries."""
+    check_field(entry, 'isbn', try_fix)
     check_field(entry, 'publisher', try_fix)
     check_field(entry, 'year', try_fix)
-    check_field(entry, 'isbn', try_fix)
+    check_field(entry, 'url', try_fix)
 
 
 def check_inproceedings(entry, try_fix):
     """Check and fix inproceedings entries."""
+    check_field(entry, 'doi', try_fix, try_find=True)
     check_field(entry, 'booktitle', try_fix, try_find=True)
     check_field(entry, 'month', try_fix, try_find=True)
     check_field(entry, 'year', try_fix, try_find=True)
     check_field(entry, 'address', try_fix, try_find=True)
     check_field(entry, 'pages', try_fix, try_find=True)
     check_field(entry, 'publisher', try_fix, try_find=True)
+    check_field(entry, 'url', try_fix)
 
 
 def check_techreport(entry, try_fix):
@@ -311,6 +517,7 @@ def check_techreport(entry, try_fix):
     check_field(entry, 'year', try_fix, try_find=True)
     check_field(entry, 'address', try_fix, try_find=True)
     check_field(entry, 'institution', try_fix, try_find=True)
+    check_field(entry, 'url', try_fix)
 
 
 ENTRY_CHECKS = {
@@ -343,6 +550,10 @@ def cache_field(entry, field, cache_dict):
         values = (
             entry[field].split(' and ') if field == 'author'
             else [entry[field]])
+
+        if field == 'booktitle':
+            values = [norm_booktitle(v) for v in values]
+
         for value in values:
             if value not in cache_dict:
                 cache_dict[value] = []
@@ -410,7 +621,7 @@ def check_database(database, try_fix):
     return authors, journals, booktitles
 
 
-def look_for_misspellings(values, name):
+def look_for_misspellings(values, name, threshold=0.8):
     """Check for values with minor differences in spelling."""
     collision_groups = {}
     for value1 in values:
@@ -418,7 +629,7 @@ def look_for_misspellings(values, name):
             if value1 == value2:
                 continue
 
-            if similarity(value1, value2) > 0.8:
+            if threshold < similarity(value1, value2):
                 if (value1 not in collision_groups
                         and value2 in collision_groups):
                     collision_groups[value1] = collision_groups[value2]
@@ -445,8 +656,7 @@ def look_for_misspellings(values, name):
         formatted_values = [
             "'{}' ({})".format(a, ", ".join(values[a]))
             for a in group]
-        print(colored("{} might be the same: {}".format(
-            name, ", ".join(formatted_values)), color='yellow'),
+        print(colored("{} might be the same.".format(name), color='yellow'),
               file=sys.stderr)
         for val in formatted_values:
             print(colored(" * {}".format(val), color='yellow'),
@@ -482,7 +692,7 @@ def main():
 
     look_for_misspellings(authors, 'Authors')
     look_for_misspellings(journals, 'Journals')
-    look_for_misspellings(booktitles, 'Booktitles (proceedings)')
+    look_for_misspellings(booktitles, 'Booktitles (proceedings)', threshold=0.9)
 
     writer = BibTexWriter()
     writer.indent = '    '
