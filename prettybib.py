@@ -241,7 +241,10 @@ def check_issn(entry, try_fix):
                      dbo:issn ?issn .
                      FILTER(str(?journal_name)="{}")
         }}""".format(journal))
-        results = sparql.query().convert()
+        try:
+            results = sparql.query().convert()
+        except:
+            return False
 
         if results['results']['bindings']:
             issn = results['results']['bindings'][0]['issn']['value']
@@ -564,9 +567,13 @@ def normalize_authors(author_field):
     orig_authors = author_field.split(" and ")
     new_authors = []
     for author in orig_authors:
-        if "," in author:
-            surname, first_names = re.split(r",\s+", author)
-            new_authors.append("{} {}".format(first_names, surname))
+        if "," not in author:
+            names = re.split(r"\s+", author)
+            if len(names) == 1:
+                new_authors.append(author)
+            else:
+                new_authors.append("{}, {}".format(
+                    names[-1], " ".join(names[:-1])))
         else:
             new_authors.append(author)
     return " and ".join(new_authors)
