@@ -94,14 +94,19 @@ def check_year(entry, _):
 
         if year < 0:
             err_message(entry, "year '{}' is negative.".format(year))
+            return False
         if year > current_year:
             err_message(entry, "year '{}' is in the future.".format(year))
+            return False
         if year < 1800:
             err_message(entry, "year '{}' is before 1800".format(year))
+            return False
     except ValueError:
         if entry['year'] != 'TODO':
             err_message(entry,
                         "year '{}' is not an integer".format(entry['year']))
+        return False
+    return True
 
 
 MONTHS = [
@@ -130,8 +135,11 @@ def check_pages(entry, _):
             err_message(entry,
                         "the end page ({}) is before the start page ({})".
                         format(end, start))
+            return False
+        return True
     elif pages != 'TODO':
         err_message(entry, "pages field looks strange: '{}'".format(pages))
+        return False
 
 
 def check_isbn(entry, try_fix):
@@ -399,10 +407,19 @@ def check_doi(entry, try_fix):
             doi_ok = False
 
     if doi_ok:
-        # TODO: try retrieve bib by doi
         return True
 
     if try_fix and not doi_ok:
+        if ("publisher" in entry
+                and (entry["publisher"] ==
+                    "Association for Computational Linguistics")
+                and "url" in entry
+                and "aclweb.org/anthology/" in entry["url"]):
+            paper_id = [t for t in entry["url"].split("/") if t][-1]
+            entry["doi"] = "10.3115/v1/{}".format(paper_id.lower())
+            log_message(entry, "doi inferred from ACL URL.")
+            return True
+
         lookup = search_crossref_for_doi(entry['title'])
 
         if not lookup:
@@ -462,7 +479,7 @@ def check_article(entry, try_fix):
         # TODO try to recover from ISSN or paper name
     else:
         journal = entry['journal']
-        if journal == 'CoRR' or journal.startswith('arXiv'):
+        if journal == 'CoRR' or 'arXiv' in journal:
             if try_fix and 'title' in entry:
                 norm_title = normalize_title(entry['title'])
                 if norm_title in CITATION_DATABASE:
@@ -484,14 +501,18 @@ def check_article(entry, try_fix):
             check_field(entry, 'volume', try_fix)
             # TODO check whether link and volume agree
         else:
-            check_field(entry, 'doi', try_fix, try_find=True)
-            check_field(entry, 'issn', try_fix)
+            everything_ok = True
+            everything_ok &= check_field(entry, 'doi', try_fix, try_find=True)
+            everything_ok &= check_field(entry, 'issn', try_fix)
             if 'volume' not in entry:
-                check_field(entry, 'number', try_fix)
-            check_field(entry, 'pages', try_fix)
-            check_field(entry, 'publisher', try_fix)
-            check_field(entry, 'address', try_fix)
-            check_field(entry, 'url', try_fix)
+                everything_ok &= check_field(entry, 'number', try_fix)
+            everything_ok &= check_field(entry, 'pages', try_fix)
+            everything_ok &= check_field(entry, 'publisher', try_fix)
+            everything_ok &= check_field(entry, 'address', try_fix)
+            everything_ok &= check_field(entry, 'url', try_fix)
+
+            if try_fix and not everything_ok and entry["doi"] != "TODO":
+                try_fix_with_doi(entry, "journal")
 
 
 def check_book(entry, try_fix):
@@ -504,14 +525,18 @@ def check_book(entry, try_fix):
 
 def check_inproceedings(entry, try_fix):
     """Check and fix inproceedings entries."""
-    check_field(entry, 'doi', try_fix, try_find=True)
-    check_field(entry, 'booktitle', try_fix, try_find=True)
-    check_field(entry, 'month', try_fix, try_find=True)
-    check_field(entry, 'year', try_fix, try_find=True)
-    check_field(entry, 'address', try_fix, try_find=True)
-    check_field(entry, 'pages', try_fix, try_find=True)
-    check_field(entry, 'publisher', try_fix, try_find=True)
-    check_field(entry, 'url', try_fix)
+    everything_ok = True
+    everything_ok &= check_field(entry, 'doi', try_fix, try_find=True)
+    everything_ok &= check_field(entry, 'booktitle', try_fix, try_find=True)
+    everything_ok &= check_field(entry, 'month', try_fix, try_find=True)
+    everything_ok &= check_field(entry, 'year', try_fix, try_find=True)
+    everything_ok &= check_field(entry, 'address', try_fix, try_find=True)
+    everything_ok &= check_field(entry, 'pages', try_fix, try_find=True)
+    everything_ok &= check_field(entry, 'publisher', try_fix, try_find=True)
+    everything_ok &= check_field(entry, 'url', try_fix)
+
+    if try_fix and not everything_ok and entry["doi"] != "TODO":
+        try_fix_with_doi(entry, "inproceedings")
 
 
 def check_techreport(entry, try_fix):
@@ -531,12 +556,53 @@ ENTRY_CHECKS = {
 }
 
 
+
+DOI_URL = "https://doi.org/{}"
+DOI_HEADER = {"Accept": "text/bibliography; style=bibtex"}
+
+
+def _doi_to_url(doi):
+    request = urllib.request.Request(DOI_URL.format(doi))
+    urllib.request.urlopen(request)
+    url = list(request.redirect_dict.keys())[0]
+    return url
+
+
+def _search_bib_from_doi(doi, bib_type):
+    doi = re.sub(r"\+", "%2B", doi)
+    request = urllib.request.Request(DOI_URL.format(doi), headers=DOI_HEADER)
+
+    try:
+        contents = urllib.request.urlopen(request).read().decode('utf-8')
+    except urllib.error.HTTPError:
+        return None
+
+    parser = get_bibparser()
+    retrieved_entry = parser.parse(contents).entries[0]
+
+    if bib_type == "inproceedings" and "journal" in retrieved_entry:
+        retrieved_entry["booktitle"] = retrieved_entry["journal"]
+        del retrieved_entry["journal"]
+
+    return retrieved_entry
+
+
+def try_fix_with_doi(entry, bib_type):
+    doi_entry = _search_bib_from_doi(entry['doi'], bib_type)
+    if doi_entry is None:
+        return
+    for key, value in doi_entry.items():
+        if key not in entry or entry[key] == "TODO":
+            entry[key] = value
+            log_message(entry, "{} found based on doi.".format(key))
+
+
 CACHED_JOURNALS = {}
 
 
 def cache_journal_issn(database):
     for entry in database.entries:
-        if entry['ENTRYTYPE'] == "article":
+        if entry['ENTRYTYPE'] == "article" and "journal" in entry:
             name = entry["journal"]
             if "issn" in entry:
                 if name not in CACHED_JOURNALS:
