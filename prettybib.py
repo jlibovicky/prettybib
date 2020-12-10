@@ -470,13 +470,12 @@ FIELD_CHECKS = {
 }
 
 
-def check_field(entry, field, try_fix, try_find=False, add_todo=True):
+def check_field(entry, field, try_fix, try_find=False):
     """Check if a field in in the entry, if not add a TODO."""
     ignore_list = entry.get('ignore', "").split(",")
 
     if field not in entry or entry[field] == 'TODO':
-        if add_todo:
-            entry[field] = 'TODO'
+        entry[field] = 'TODO'
         if try_fix and try_find and 'title' in entry:
             norm_title = normalize_title(entry['title'])
             if norm_title in CITATION_DATABASE:
@@ -531,7 +530,7 @@ def check_article(entry, try_fix):
             # TODO check whether link and volume agree
         else:
             everything_ok = True
-            everything_ok &= check_field(entry, 'doi', try_fix, try_find=True, add_todo=False)
+            everything_ok &= check_field(entry, 'doi', try_fix, try_find=True)
             everything_ok &= check_field(entry, 'issn', try_fix)
             if 'volume' not in entry:
                 everything_ok &= check_field(entry, 'number', try_fix)
@@ -555,7 +554,7 @@ def check_book(entry, try_fix):
 def check_inproceedings(entry, try_fix):
     """Check and fix inproceedings entries."""
     everything_ok = True
-    everything_ok &= check_field(entry, 'doi', try_fix, try_find=True, add_todo=False)
+    everything_ok &= check_field(entry, 'doi', try_fix, try_find=True)
     everything_ok &= check_field(entry, 'booktitle', try_fix, try_find=True)
     everything_ok &= check_field(entry, 'month', try_fix, try_find=True)
     everything_ok &= check_field(entry, 'year', try_fix, try_find=True)
@@ -611,7 +610,7 @@ def _search_bib_from_doi(doi, bib_type):
 
     try:
         contents = urllib.request.urlopen(request).read().decode('utf-8')
-    except urllib.error.HTTPError:
+    except (urllib.error.HTTPError, ConnectionResetError):
         return None
 
     try:
@@ -715,8 +714,7 @@ def check_database(database, try_fix):
         check_field(entry, 'author', try_fix)
 
         if 'title' in entry:
-            norm_title = entry['title'].lower().translate(
-                str.maketrans('', '', string.whitespace + '}{'))
+            norm_title = normalize_title(entry['title'])
             if norm_title in titles:
                 msg = ("Reference with this title is already "
                        "in the database as {}.").format(
