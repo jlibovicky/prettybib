@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """BibTex checker and formater.
 
@@ -26,6 +26,7 @@ import pycountry
 
 CITATION_DATABASE = {}
 
+
 def get_bibparser():
     return bibtexparser.bparser.BibTexParser(
         ignore_nonstandard_types=False,
@@ -34,8 +35,9 @@ def get_bibparser():
 
 
 def normalize_title(title):
-    return title.lower().translate(str.maketrans(
-        '', '', string.whitespace + '}{'))
+    return title.lower().translate(
+        str.maketrans('', '', string.whitespace + '}{')
+    )
 
 
 def load_anthologies(anthologies):
@@ -111,7 +113,8 @@ def check_year(entry, _):
 
 MONTHS = [
     "January", "February", "March", "April", "May", "June", "July",
-    "August", "September", "October", "November", "December"]
+    "August", "September", "October", "November", "December"
+]
 
 RANGE_REGEX = re.compile(r"^([A-Z][a-z]*)--([A-Z][a-z]*)$")
 
@@ -283,7 +286,7 @@ def check_issn(entry, try_fix):
 def check_booktitle(entry, try_fix):
     if entry['booktitle'].endswith("Conference on"):
         err_message(entry,
-            "Book title should not end with 'Conference on', rephrase")
+                    "Book title should not end with 'Conference on', rephrase")
         return False
     return True
 
@@ -293,7 +296,8 @@ US_STATES = [
     "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
     "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
     "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
-    "WI", "WY", "D.C."]
+    "WI", "WY", "D.C."
+]
 
 
 def check_address(entry, _):
@@ -377,16 +381,16 @@ def search_crossref_for_doi(title):
     title_signature = NON_APLHNUM.sub("", title.lower())
 
     searchurl = 'http://search.crossref.org/?q='
-    requrl = searchurl+keywords
+    requrl = searchurl + keywords
     try:
         s = bs4.BeautifulSoup(urllib.request.urlopen(requrl).read(), 'lxml')
     except UnicodeEncodeError:
         return []
-    item_list = s.findAll('td', {'class':'item-data'})
+    item_list = s.findAll('td', {'class': 'item-data'})
 
-    titles = [i.find('p', {'class':'lead'}).text.strip() for i in item_list]
+    titles = [i.find('p', {'class': 'lead'}).text.strip() for i in item_list]
     doiurls = [
-        i.find('div', {'class':'item-links'}).find('a')['href']
+        i.find('div', {'class': 'item-links'}).find('a')['href']
         for i in item_list]
 
     assert len(titles) == len(doiurls)
@@ -434,7 +438,7 @@ def check_doi(entry, try_fix):
     if try_fix and not doi_ok:
         if ("publisher" in entry
                 and (entry["publisher"] ==
-                    "Association for Computational Linguistics")
+                     "Association for Computational Linguistics")
                 and "url" in entry
                 and "aclweb.org/anthology/" in entry["url"]):
             paper_id = [t for t in entry["url"].split("/") if t][-1]
@@ -448,7 +452,8 @@ def check_doi(entry, try_fix):
             return False
 
         if len(lookup) > 1:
-            err_message(entry, "Found multiple dois: {}".format(", ".join(lookup)))
+            err_message(entry, "Found multiple dois: {}".format(
+                ", ".join(lookup)))
             return False
 
         entry['doi'] = lookup[0]
@@ -592,7 +597,6 @@ ENTRY_CHECKS = {
 }
 
 
-
 DOI_URL = "https://doi.org/{}"
 DOI_HEADER = {"Accept": "text/bibliography; style=bibtex"}
 
@@ -649,7 +653,8 @@ def cache_journal_issn(database):
                 elif entry["issn"] != CACHED_JOURNALS[name]:
                     print(
                         "Journal '{}' has more differens ISSNs.".format(name),
-                        file=sys.stderr)
+                        file=sys.stderr
+                    )
 
 
 def cache_field(entry, field, cache_dict):
@@ -803,7 +808,9 @@ def main():
 
     look_for_misspellings(authors, 'Authors')
     look_for_misspellings(journals, 'Journals')
-    look_for_misspellings(booktitles, 'Booktitles (proceedings)', threshold=0.9)
+    look_for_misspellings(
+        booktitles, 'Booktitles (proceedings)', threshold=0.9
+    )
 
     writer = BibTexWriter()
     writer.indent = '    '
