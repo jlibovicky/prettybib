@@ -2,3 +2,4 @@ bibtexparser
 isbnlib
 termcolor
 SPARQLWrapper
+pycountry
